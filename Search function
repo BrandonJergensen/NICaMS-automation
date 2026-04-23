@@ -1,0 +1,644 @@
+import re
+import time
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict, Tuple, Any
+
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+
+print("Python script launched.")
+
+
+# =========================================================
+# CONFIG
+# =========================================================
+LOGIN_URL = "https://YOUR_LOGIN_PAGE_URL"
+USERNAME = "your_username"
+
+# Trial input from CSV
+CSV_RECORD = {
+    "fname": "",
+    "lname": "",
+    "dob": "",   # 
+    "id": None,            # or "123456"
+}
+
+TRY_ACTIVE_FIRST = True
+
+options = Options()
+driver = webdriver.Chrome(options=options)
+wait = WebDriverWait(driver, 20)
+
+
+# =========================================================
+# GENERAL HELPERS
+# =========================================================
+def debug(msg: str) -> None:
+    print(f"[DEBUG] {msg}")
+
+
+def safe_click(element) -> None:
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+        time.sleep(0.2)
+        element.click()
+    except Exception:
+        driver.execute_script("arguments[0].click();", element)
+
+
+def clear_and_type(element, value: Optional[str]) -> None:
+    safe_click(element)
+    try:
+        element.clear()
+    except Exception:
+        pass
+    element.send_keys(Keys.CONTROL + "a")
+    element.send_keys(Keys.BACKSPACE)
+    if value:
+        element.send_keys(str(value))
+
+
+def parse_date(date_str: Optional[str]) -> Optional[datetime]:
+    if not date_str:
+        return None
+    s = date_str.strip()
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s, "%m/%d/%Y")
+    except ValueError:
+        return None
+
+
+def normalize_name(name: Optional[str]) -> str:
+    if not name:
+        return ""
+    name = name.strip().upper()
+    name = re.sub(r"\s+", " ", name)
+    return name
+
+
+def meaningful_segments(name: Optional[str]) -> List[str]:
+    n = normalize_name(name)
+    parts = re.split(r"[^A-Z0-9]+", n)
+    return [p for p in parts if len(p) >= 3]
+
+
+def best_search_token(name: Optional[str]) -> str:
+    parts = meaningful_segments(name)
+    if not parts:
+        return normalize_name(name)
+    return max(parts, key=len)
+
+
+def looks_like_date_or_blank(s: str) -> bool:
+    s = s.strip()
+    if not s:
+        return True
+    return bool(re.fullmatch(r"\d{2}/\d{2}/\d{4}", s))
+
+
+# =========================================================
+# LOGIN / NAVIGATION
+# =========================================================
+def login_and_open_nicams():
+    debug("Opening login page...")
+    driver.get(LOGIN_URL)
+    driver.maximize_window()
+
+    debug("Waiting for username field...")
+    username_box = wait.until(
+        EC.presence_of_element_located((By.ID, "loginForm:userName"))
+    )
+    clear_and_type(username_box, USERNAME)
+
+    debug("Waiting for password field...")
+    wait.until(
+        EC.presence_of_element_located((By.ID, "loginForm:password"))
+    )
+
+    print("\nEnter your password in the browser.")
+    input("Press Enter AFTER you have typed your password...")
+
+    debug("Clicking login...")
+    login_button = wait.until(
+        EC.element_to_be_clickable((By.ID, "loginForm:btnLogin"))
+    )
+    safe_click(login_button)
+
+    debug("Login submitted. Waiting briefly for redirect...")
+    time.sleep(3)
+
+    current_url = driver.current_url
+    debug(f"Current URL after login: {current_url}")
+    debug(f"Page title after login: {driver.title}")
+
+    # Already inside NICaMS search page
+    if "inmateSearchResults" in current_url:
+        debug("Already inside NICaMS system. No need to click link.")
+        return
+
+    # Otherwise try clicking NICaMS landing-page link
+    try:
+        debug("Looking for NICaMS link...")
+        nicams_link = wait.until(
+            EC.element_to_be_clickable((By.LINK_TEXT, "NICaMS Data Entry and Inquiry"))
+        )
+
+        debug("Clicking NICaMS link...")
+        driver.execute_script("arguments[0].click();", nicams_link)
+
+        debug("Waiting for new tab...")
+        wait.until(lambda d: len(d.window_handles) > 1)
+        driver.switch_to.window(driver.window_handles[-1])
+
+        debug("Switched to NICaMS tab.")
+        debug(f"Final URL: {driver.current_url}")
+        debug(f"Final title: {driver.title}")
+
+    except Exception as e:
+        debug(f"NICaMS link path failed: {type(e).__name__}: {e}")
+        debug("Continuing without link click.")
+
+
+# =========================================================
+# SEARCH PAGE HELPERS
+# =========================================================
+def set_checkbox_state(checkbox_input_id: str, should_be_checked: bool) -> None:
+    cb = wait.until(EC.presence_of_element_located((By.ID, checkbox_input_id)))
+    current = cb.is_selected()
+    if current != should_be_checked:
+        safe_click(cb)
+        time.sleep(0.3)
+
+
+def wait_for_ajax_refresh() -> None:
+    time.sleep(0.75)
+    try:
+        wait.until(
+            EC.invisibility_of_element_located((By.ID, "inmateSearchId:pdial1"))
+        )
+    except Exception:
+        pass
+    time.sleep(0.75)
+
+
+def clear_basic_search() -> None:
+    clear_btn = wait.until(
+        EC.element_to_be_clickable((By.ID, "inmateSearchId:inmateSearchForm:cancelSearch"))
+    )
+    safe_click(clear_btn)
+    wait_for_ajax_refresh()
+
+
+def search_by_id(id_value: str) -> None:
+    debug(f"Searching by ID: {id_value}")
+
+    id_box = wait.until(
+        EC.presence_of_element_located((By.ID, "inmateSearchId:inmateLookupForm:idSearchParam1"))
+    )
+    clear_and_type(id_box, id_value)
+
+    go_btn = wait.until(
+        EC.element_to_be_clickable((By.ID, "inmateSearchId:inmateLookupForm:inmateLookupById1"))
+    )
+    safe_click(go_btn)
+    wait_for_ajax_refresh()
+
+
+def search_by_name_dob(last_name: str, first_name: str, dob_mmddyyyy: str,
+                       active_checked: bool = True, exact_dob: bool = True) -> None:
+    debug(f"Searching by name/DOB | lname={last_name}, fname={first_name}, dob={dob_mmddyyyy}, active={active_checked}, exact_dob={exact_dob}")
+
+    clear_basic_search()
+
+    last_box = wait.until(
+        EC.presence_of_element_located((By.ID, "inmateSearchId:inmateSearchForm:inmateSearchlastName"))
+    )
+    first_box = wait.until(
+        EC.presence_of_element_located((By.ID, "inmateSearchId:inmateSearchForm:inmateSearchFirstName"))
+    )
+    dob_box = wait.until(
+        EC.presence_of_element_located((By.ID, "inmateSearchId:inmateSearchForm:inmateSearchDob_input"))
+    )
+
+    clear_and_type(last_box, last_name)
+    clear_and_type(first_box, first_name)
+    clear_and_type(dob_box, dob_mmddyyyy)
+    dob_box.send_keys(Keys.TAB)
+
+    set_checkbox_state("inmateSearchId:inmateSearchForm:inmateSearchActive_input", active_checked)
+    set_checkbox_state("inmateSearchId:inmateSearchForm:inmateSearchExactDob_input", exact_dob)
+
+    search_btn = wait.until(
+        EC.element_to_be_clickable((By.ID, "inmateSearchId:inmateSearchForm:inmateSearch"))
+    )
+    safe_click(search_btn)
+    wait_for_ajax_refresh()
+
+
+# =========================================================
+# RESULTS EXTRACTION
+# Trial extractor tuned to avoid menus/header furniture.
+# =========================================================
+def get_result_rows():
+    rows = driver.find_elements(By.TAG_NAME, "tr")
+    good_rows = []
+
+    for row in rows:
+        try:
+            cols = row.find_elements(By.TAG_NAME, "td")
+            if len(cols) < 12:
+                continue
+
+            texts = [c.text.strip() for c in cols]
+
+            # expected columns
+            dob = texts[5] if len(texts) > 5 else ""
+            date_rcvd = texts[11] if len(texts) > 11 else ""
+            date_rlsd = texts[12] if len(texts) > 12 else ""
+
+            if not looks_like_date_or_blank(dob):
+                continue
+            if not looks_like_date_or_blank(date_rcvd):
+                continue
+            if len(texts) > 12 and not looks_like_date_or_blank(date_rlsd):
+                continue
+
+            combined = " ".join(texts).upper()
+            junk_tokens = {
+                "CASE PLAN", "SEARCH", "ADDL SEARCH", "GO TO",
+                "INMATE LOOKUP", "INMATE SEARCH RESULTS",
+                "SHOW ONLY SELECTED", "CLEAR CHECKMARKS"
+            }
+            if any(token in combined for token in junk_tokens):
+                continue
+
+            good_rows.append(row)
+
+        except Exception:
+            continue
+
+    return good_rows
+
+
+def extract_candidates():
+    rows = get_result_rows()
+    debug(f"Found {len(rows)} likely result row(s)")
+
+    candidates = []
+
+    for idx, row in enumerate(rows):
+        try:
+            cols = row.find_elements(By.TAG_NAME, "td")
+
+            id_link = None
+            try:
+                id_link = cols[1].find_element(By.TAG_NAME, "a")
+            except Exception:
+                pass
+
+            candidate = {
+                "row_index": idx,
+                "row_element": row,
+                "id": cols[1].text.strip(),
+                "id_link": id_link,
+                "lname": cols[2].text.strip(),
+                "fname": cols[3].text.strip(),
+                "mi": cols[4].text.strip(),
+                "dob": cols[5].text.strip(),
+                "race": cols[6].text.strip(),
+                "prev_id": cols[7].text.strip(),
+                "wec_a_nbr": cols[8].text.strip(),
+                "sid": cols[9].text.strip(),
+                "fbi": cols[10].text.strip(),
+                "date_rcvd": cols[11].text.strip(),
+                "date_rlsd": cols[12].text.strip() if len(cols) > 12 else "",
+                "fac": cols[13].text.strip() if len(cols) > 13 else "",
+                "loc": cols[14].text.strip() if len(cols) > 14 else "",
+            }
+
+            candidates.append(candidate)
+
+        except Exception as e:
+            debug(f"Skipping extracted row {idx} due to error: {e}")
+
+    return candidates
+
+
+def print_candidates(candidates: List[Dict[str, Any]]) -> None:
+    print("\n========== EXTRACTED CANDIDATES ==========")
+    for i, c in enumerate(candidates, start=1):
+        print(
+            f"{i}. ID={c['id']} | LNAME={c['lname']} | FNAME={c['fname']} | "
+            f"DOB={c['dob']} | PREV_ID={c['prev_id']} | "
+            f"DATE_RCVD={c['date_rcvd']} | DATE_RLSD={c['date_rlsd']} | "
+            f"FAC={c['fac']} | LOC={c['loc']}"
+        )
+    print("==========================================\n")
+
+
+# =========================================================
+# MATCHING / DECISION ENGINE
+# =========================================================
+def is_active_loc(loc: Optional[str]) -> bool:
+    if not loc:
+        return False
+    loc_u = loc.strip().upper()
+
+    if loc_u in {"PROL", "PRS"}:
+        return True
+
+    # housing-like values often contain digits
+    if any(ch.isdigit() for ch in loc_u):
+        return True
+
+    return False
+
+
+def candidate_is_eligible(candidate: Dict[str, Any]) -> Tuple[bool, str]:
+    loc = candidate.get("loc", "")
+    if is_active_loc(loc):
+        return True, "active_location"
+
+    rlsd = parse_date(candidate.get("date_rlsd"))
+    if rlsd is None:
+        return False, "inactive_and_no_release_date"
+
+    cutoff = datetime.now() - timedelta(days=548)  # ~18 months
+    if rlsd < cutoff:
+        return False, "released_over_18_months_ago_and_not_active"
+
+    return True, "released_within_18_months"
+
+
+def name_match_score(csv_value: str, cand_value: str) -> int:
+    csv_norm = normalize_name(csv_value)
+    cand_norm = normalize_name(cand_value)
+
+    if not csv_norm or not cand_norm:
+        return 0
+
+    if csv_norm == cand_norm:
+        return 25
+
+    csv_segments = meaningful_segments(csv_norm)
+    cand_segments = meaningful_segments(cand_norm)
+
+    if set(csv_segments) & set(cand_segments):
+        return 12
+
+    if csv_norm in cand_norm or cand_norm in csv_norm:
+        return 8
+
+    return 0
+
+
+def score_candidate(csv_record: Dict[str, Any], candidate: Dict[str, Any]) -> Tuple[int, List[str]]:
+    reasons = []
+    score = 0
+
+    # DOB exact required for v1
+    if normalize_name(csv_record["dob"]) != normalize_name(candidate["dob"]):
+        return -999, ["dob_mismatch_hard_fail"]
+
+    score += 40
+    reasons.append("dob_exact(+40)")
+
+    csv_id = csv_record.get("id")
+    if csv_id:
+        if str(csv_id).strip() == str(candidate.get("id", "")).strip():
+            score += 45
+            reasons.append("id_exact(+45)")
+        elif str(csv_id).strip() == str(candidate.get("prev_id", "")).strip():
+            score += 20
+            reasons.append("prev_id_match_from_csv_id(+20)")
+
+    lname_pts = name_match_score(csv_record["lname"], candidate["lname"])
+    if lname_pts:
+        score += lname_pts
+        reasons.append(f"lname_match(+{lname_pts})")
+
+    fname_pts = name_match_score(csv_record["fname"], candidate["fname"])
+    if fname_pts:
+        fname_adjusted = 18 if fname_pts == 25 else 8
+        score += fname_adjusted
+        reasons.append(f"fname_match(+{fname_adjusted})")
+
+    if is_active_loc(candidate.get("loc", "")):
+        score += 20
+        reasons.append("active_loc(+20)")
+    else:
+        score += 8
+        reasons.append("recent_release_nonactive(+8)")
+
+    return score, reasons
+
+
+def apply_relationship_adjustments(candidates: List[Dict[str, Any]]) -> Dict[int, Dict[str, Any]]:
+    id_map = {}
+    for c in candidates:
+        cid = str(c.get("id", "")).strip()
+        if cid:
+            id_map[cid] = c
+
+    adjustments = {id(c): {"score_delta": 0, "reasons": []} for c in candidates}
+
+    for c in candidates:
+        prev_id = str(c.get("prev_id", "")).strip()
+        if prev_id and prev_id in id_map:
+            adjustments[id(c)]["score_delta"] += 30
+            adjustments[id(c)]["reasons"].append("prev_id_points_to_another_candidate(+30)")
+
+            older = id_map[prev_id]
+            adjustments[id(older)]["score_delta"] -= 10
+            adjustments[id(older)]["reasons"].append("is_previous_record_of_other_candidate(-10)")
+
+    return adjustments
+
+
+def decide_match(csv_record: Dict[str, Any], candidates: List[Dict[str, Any]]) -> Tuple[str, Any]:
+    if not candidates:
+        return "NO_MATCH", {"reason": "no_extracted_rows"}
+
+    eligible = []
+    rejected = []
+
+    for c in candidates:
+        ok, why = candidate_is_eligible(c)
+        if ok:
+            eligible.append(c)
+        else:
+            rejected.append((c, why))
+
+    print("\n========== ELIGIBILITY FILTER ==========")
+    for c, why in rejected:
+        print(f"REJECTED ID={c['id']} | reason={why}")
+    print("========================================\n")
+
+    print("\n========== ELIGIBLE CANDIDATES ==========")
+    for c in eligible:
+        print(f"KEPT ID={c['id']} | LOC={c['loc']} | DATE_RLSD={c['date_rlsd']} | PREV_ID={c['prev_id']}")
+    print("========================================\n")
+
+    if not eligible:
+        return "NO_MATCH", {"reason": "no_eligible_candidates"}
+
+    relationship_adjustments = apply_relationship_adjustments(eligible)
+
+    scored = []
+    for c in eligible:
+        s, reasons = score_candidate(csv_record, c)
+
+        adj = relationship_adjustments.get(id(c), {"score_delta": 0, "reasons": []})
+        s += adj["score_delta"]
+        reasons.extend(adj["reasons"])
+
+        if s > -999:
+            scored.append((c, s, reasons))
+        else:
+            print(f"HARD FAIL SCORE ID={c['id']} | reasons={reasons}")
+
+    if not scored:
+        return "NO_MATCH", {"reason": "no_candidates_after_scoring"}
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+
+    print("========== SCORED CANDIDATES ==========")
+    for c, s, reasons in scored:
+        print(f"ID={c['id']} | score={s} | reasons={', '.join(reasons)}")
+    print("=======================================\n")
+
+    best_c, best_score, best_reasons = scored[0]
+
+    if best_score < 60:
+        return "NO_MATCH", {
+            "reason": "best_score_below_threshold",
+            "best_id": best_c["id"],
+            "best_score": best_score,
+        }
+
+    if len(scored) > 1:
+        second_c, second_score, _ = scored[1]
+        if best_score - second_score < 15:
+            return "REVIEW", {
+                "reason": "top_two_too_close",
+                "best_id": best_c["id"],
+                "best_score": best_score,
+                "second_id": second_c["id"],
+                "second_score": second_score,
+                "scored": scored,
+            }
+
+    if best_score >= 85:
+        return "AUTO", {
+            "candidate": best_c,
+            "score": best_score,
+            "reasons": best_reasons,
+        }
+
+    return "REVIEW", {
+        "reason": "best_score_not_high_enough_for_auto",
+        "best_id": best_c["id"],
+        "best_score": best_score,
+        "reasons": best_reasons,
+        "scored": scored,
+    }
+
+
+# =========================================================
+# SEARCH STRATEGY
+# =========================================================
+def run_trial_search(csv_record: Dict[str, Any]) -> Tuple[str, Any, List[Dict[str, Any]]]:
+    # 1. Try ID first if present
+    if csv_record.get("id"):
+        search_by_id(csv_record["id"])
+        candidates = extract_candidates()
+        print_candidates(candidates)
+        decision, details = decide_match(csv_record, candidates)
+        return decision, details, candidates
+
+    # 2. Exact name + DOB, Active checked first
+    search_by_name_dob(
+        last_name=csv_record["lname"],
+        first_name=csv_record["fname"],
+        dob_mmddyyyy=csv_record["dob"],
+        active_checked=TRY_ACTIVE_FIRST,
+        exact_dob=True,
+    )
+    candidates = extract_candidates()
+    print_candidates(candidates)
+    decision, details = decide_match(csv_record, candidates)
+
+    # 3. Retry with Active unchecked if needed
+    if decision == "NO_MATCH":
+        print("\nRetrying with Active unchecked...\n")
+        search_by_name_dob(
+            last_name=csv_record["lname"],
+            first_name=csv_record["fname"],
+            dob_mmddyyyy=csv_record["dob"],
+            active_checked=False,
+            exact_dob=True,
+        )
+        candidates = extract_candidates()
+        print_candidates(candidates)
+        decision, details = decide_match(csv_record, candidates)
+
+    # 4. Retry with segment-based tokens if still no match
+    if decision == "NO_MATCH":
+        print("\nRetrying with segment-based name tokens...\n")
+        lname_token = best_search_token(csv_record["lname"])
+        fname_token = best_search_token(csv_record["fname"])
+        search_by_name_dob(
+            last_name=lname_token,
+            first_name=fname_token,
+            dob_mmddyyyy=csv_record["dob"],
+            active_checked=False,
+            exact_dob=True,
+        )
+        candidates = extract_candidates()
+        print_candidates(candidates)
+        decision, details = decide_match(csv_record, candidates)
+
+    return decision, details, candidates
+
+
+# =========================================================
+# MAIN
+# =========================================================
+try:
+    print("=== SCRIPT STARTING ===")
+    login_and_open_nicams()
+
+    print("=== LOGIN/NAVIGATION COMPLETE ===")
+    input("Press Enter to continue to the search stage... ")
+
+    decision, details, candidates = run_trial_search(CSV_RECORD)
+
+    print("\n========== FINAL DECISION ==========")
+    print("CSV RECORD:", CSV_RECORD)
+    print("DECISION:", decision)
+    print("DETAILS:", details)
+    print("====================================\n")
+
+    input("Inspect the browser and terminal output, then press Enter to close...")
+
+except Exception as e:
+    print("\n[ERROR]", type(e).__name__, e)
+    try:
+        print("[DEBUG] URL:", driver.current_url)
+        print("[DEBUG] Title:", driver.title)
+    except Exception:
+        print("[DEBUG] Could not read URL/title")
+    input("Press Enter to close after reviewing the error...")
+
+finally:
+    try:
+        driver.quit()
+    except Exception:
+        pass
