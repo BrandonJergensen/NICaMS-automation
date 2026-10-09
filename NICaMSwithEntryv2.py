@@ -16,7 +16,7 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 # CONFIG
 # =========================================================
 LOGIN_URL = "https://dcs-nicams.ne.gov/inmates/websuite/inmateSearchResults.xhtml"
-USERNAME = "bjergen-001"
+USERNAME = ""
 
 # Trial input from CSV
 CSV_RECORD = {
