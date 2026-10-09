@@ -21,7 +21,7 @@ CSV_FOLDER = r"C:\Users\btjergensen\OneDrive - Metropolitan Community College\Do
 MANUAL_SUBMIT_REVIEW = True
 
 LOGIN_URL = "https://dcs-nicams.ne.gov/inmates/websuite/inmateSearchResults.xhtml"
-USERNAME = "bjergen-001"
+USERNAME = ""
 
 # Trial input from CSV
 #CSV_RECORD = {
