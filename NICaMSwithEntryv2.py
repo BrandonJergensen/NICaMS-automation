@@ -20,10 +20,10 @@ USERNAME = "bjergen-001"
 
 # Trial input from CSV
 CSV_RECORD = {
-    "fname": "ALLEN",
-    "lname": "ZOLLICOFFER",
+    "fname": "",
+    "lname": "",
     "dob": "06/02/1967",   # MM/DD/YYYY
-    "id": None,            # or "214359"
+    "id": None,            # or ""
 }
 
 # If True, first pass searches with Active checked.
