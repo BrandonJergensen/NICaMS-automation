@@ -16,7 +16,7 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 # CONFIG
 # =========================================================
 LOGIN_URL = "https://dcs-nicams.ne.gov/inmates/websuite/inmateSearchResults.xhtml"
-USERNAME = ""
+NAME = ""
 
 # Trial input from CSV
 CSV_RECORD = {
@@ -157,11 +157,11 @@ def login_and_open_nicams():
     driver.get(LOGIN_URL)
     driver.maximize_window()
 
-    debug("Waiting for username field...")
-    username_box = wait.until(
-        EC.presence_of_element_located((By.ID, "loginForm:userName"))
+    debug("Waiting for name field...")
+    name_box = wait.until(
+        EC.presence_of_element_located((By.ID, "loginForm:Name"))
     )
-    clear_and_type(username_box, USERNAME)
+    clear_and_type(name_box, NAME)
 
     debug("Waiting for password field...")
     wait.until(
