@@ -1391,7 +1391,7 @@ try:
 
     print("=== LOGIN/NAVIGATION COMPLETE ===")
 
-    CSV_FOLDER = r"C:\Users\btjergensen\OneDrive - Metropolitan Community College\Documents\python"
+    CSV_FOLDER = r"C:\Users\"
 
     CSV_FILE_PATH = choose_csv_file(CSV_FOLDER)
 
