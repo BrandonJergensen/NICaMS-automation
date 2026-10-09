@@ -17,7 +17,7 @@ from selenium.common.exceptions import TimeoutException, NoSuchElementException
 # =========================================================
 # CONFIG
 # =========================================================
-CSV_FOLDER = r"C:\Users\btjergensen\OneDrive - Metropolitan Community College\Documents\python"
+CSV_FOLDER = r"C:\Users\"
 MANUAL_SUBMIT_REVIEW = True
 
 LOGIN_URL = "https://dcs-nicams.ne.gov/inmates/websuite/inmateSearchResults.xhtml"
